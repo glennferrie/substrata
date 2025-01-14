@@ -689,6 +689,12 @@ void WorldCreation::removeHypercardMaterials(ServerAllWorldsState& all_worlds_st
 	conPrint("removeHypercardMaterials(): Updated " + toString(num_updated) + " objects.  Elapsed: " + timer.elapsedStringNSigFigs(3));
 }
 
+void WorldCreation::createGreenfield(Reference<ServerAllWorldsState> world_state)
+{
+	// this is 1 mega parcel. owned by the owner. potentially editable by all. 
+	makeBlock(Vec2d(0,0), rng, 1, world_state->getRootWorldState(), /*parcel_w=*/200, /*parcel_max_z=*/100, lock);
+
+}
 
 void WorldCreation::createParcelsAndRoads(Reference<ServerAllWorldsState> world_state)
 {

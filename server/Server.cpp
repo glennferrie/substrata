@@ -372,8 +372,12 @@ int main(int argc, char *argv[])
 		else
 			server.world_state->createNewDatabase(server_state_path);
 
-
-		WorldCreation::createParcelsAndRoads(server.world_state);
+		if(parsed_args.isArgPresent("--greenfield") || parsed_args.getUnnamedArg() == "--greenfield") {
+			WorldCreation::createGreenfield(server.world_state);
+		} else {
+			WorldCreation::createParcelsAndRoads(server.world_state);	
+		}
+		
 
 		// WorldCreation::removeHypercardMaterials(*server.world_state);
 
