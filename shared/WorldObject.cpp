@@ -37,7 +37,9 @@ Copyright Glare Technologies Limited 2016 -
 #include <utils/XMLParseUtils.h>
 #include <zstd.h>
 #include <pugixml.hpp>
-
+#if INDIGO_SUPPORT
+#include <dll/include/SceneNodeModel.h>
+#endif
 
 InstanceInfo::~InstanceInfo()
 {
@@ -49,9 +51,11 @@ InstanceInfo::~InstanceInfo()
 
 WorldObject::WorldObject() noexcept
 {
+#if !defined(__clang__) // Clang complains with "warning: offset of on non-standard-layout type 'WorldObject' [-Winvalid-offsetof]".
 	static_assert(offsetof(WorldObject, centroid_ws) == 0);
 	static_assert(offsetof(WorldObject, aabb_ws_longest_len) == 16);
 	static_assert(offsetof(WorldObject, aabb_os) == 32);
+#endif
 
 	creator_id = UserID::invalidUserID();
 	flags = COLLIDABLE_FLAG;
@@ -418,6 +422,18 @@ std::string WorldObject::objectTypeString(ObjectType t)
 	case ObjectType_Text: return "text";
 	default: return "Unknown";
 	}
+}
+
+WorldObject::ObjectType WorldObject::objectTypeForString(const std::string& ob_type_string)
+{
+	if(ob_type_string == "generic") return ObjectType_Generic;
+	if(ob_type_string == "hypercard") return ObjectType_Hypercard;
+	if(ob_type_string == "voxel group") return ObjectType_VoxelGroup;
+	if(ob_type_string == "spotlight") return ObjectType_Spotlight;
+	if(ob_type_string == "web view") return ObjectType_WebView;
+	if(ob_type_string == "video") return ObjectType_Video;
+	if(ob_type_string == "text") return ObjectType_Text;
+	throw glare::Exception("Unknown object type '" + ob_type_string + "'");
 }
 
 
@@ -834,7 +850,7 @@ std::string WorldObject::serialiseToXML(int tab_depth) const
 	s += std::string(tab_depth, '\t') + "<object>\n";
 
 	XMLWriteUtils::writeUInt64ToXML(s, "uid", uid.value(), tab_depth + 1);
-	XMLWriteUtils::writeUInt32ToXML(s, "object_type", (uint32)object_type, tab_depth + 1);
+	XMLWriteUtils::writeStringElemToXML(s, "object_type", objectTypeString(object_type), tab_depth + 1);
 	XMLWriteUtils::writeStringElemToXML(s, "model_url", model_url, tab_depth + 1);
 
 	// Write materials
@@ -897,10 +913,8 @@ Reference<WorldObject> WorldObject::loadFromXMLElem(const std::string& object_fi
 	Reference<WorldObject> ob = new WorldObject();
 	ob->uid = UID(XMLParseUtils::parseUInt64WithDefault(elem, "uid", UID::invalidUID().value()));
 	
-	const uint64 ob_type = XMLParseUtils::parseUInt64WithDefault(elem, "ob_type", (uint64)WorldObject::ObjectType_Generic);
-	if(ob_type > NUM_OBJECT_TYPES)
-		throw glare::Exception("Invalid object type: " + toString(ob_type));
-	ob->object_type = (WorldObject::ObjectType)ob_type;
+	const std::string ob_type_str = XMLParseUtils::parseStringWithDefault(elem, "object_type", "generic");
+	ob->object_type = objectTypeForString(ob_type_str);
 	
 	ob->model_url = XMLParseUtils::parseStringWithDefault(elem, "model_url", "");
 
@@ -1101,15 +1115,26 @@ void readWorldObjectFromNetworkStreamGivenUID(RandomAccessInStream& stream, Worl
 }
 
 
+const Vec3f useScaleForWorldOb(const Vec3f& scale)
+{
+	// Don't use a zero scale component, because it makes the matrix uninvertible, which breaks various things, including picking and normals.
+	Vec3f use_scale = scale;
+	if(std::fabs(use_scale.x) < 1.0e-6f) use_scale.x = 1.0e-6f;
+	if(std::fabs(use_scale.y) < 1.0e-6f) use_scale.y = 1.0e-6f;
+	if(std::fabs(use_scale.z) < 1.0e-6f) use_scale.z = 1.0e-6f;
+	return use_scale;
+}
+
+
 const Matrix4f obToWorldMatrix(const WorldObject& ob)
 {
 	const Vec4f pos((float)ob.pos.x, (float)ob.pos.y, (float)ob.pos.z, 1.f);
 
 	// Don't use a zero scale component, because it makes the matrix uninvertible, which breaks various things, including picking and normals.
 	Vec3f use_scale = ob.scale;
-	if(use_scale.x == 0) use_scale.x = 1.0e-6f;
-	if(use_scale.y == 0) use_scale.y = 1.0e-6f;
-	if(use_scale.z == 0) use_scale.z = 1.0e-6f;
+	if(std::fabs(use_scale.x) < 1.0e-6f) use_scale.x = 1.0e-6f;
+	if(std::fabs(use_scale.y) < 1.0e-6f) use_scale.y = 1.0e-6f;
+	if(std::fabs(use_scale.z) < 1.0e-6f) use_scale.z = 1.0e-6f;
 
 	// Equivalent to
 	//return Matrix4f::translationMatrix(pos + ob.translation) *
@@ -1122,17 +1147,6 @@ const Matrix4f obToWorldMatrix(const WorldObject& ob)
 	rot.setColumn(2, rot.getColumn(2) * use_scale.z);
 	rot.setColumn(3, pos + ob.translation);
 	return rot;
-}
-
-
-const Vec3f useScaleForWorldOb(const Vec3f& scale)
-{
-	// Don't use a zero scale component, because it makes the matrix uninvertible, which breaks various things, including picking and normals.
-	Vec3f use_scale = scale;
-	if(use_scale.x == 0) use_scale.x = 1.0e-6f;
-	if(use_scale.y == 0) use_scale.y = 1.0e-6f;
-	if(use_scale.z == 0) use_scale.z = 1.0e-6f;
-	return use_scale;
 }
 
 
@@ -1512,7 +1526,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 
 static void testObjectsEqual(WorldObject& ob1, WorldObject& ob2)
 {
-	ob1.getCompressedVoxels() == ob2.getCompressedVoxels();
+	testAssert(ob1.getCompressedVoxels() == ob2.getCompressedVoxels());
 
 	testAssert(ob1.materials.size() == ob2.materials.size());
 	for(size_t i=0; i<ob1.materials.size(); ++i)

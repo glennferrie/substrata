@@ -11,6 +11,7 @@ Copyright Glare Technologies Limited 2024 -
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
 #include "AboutDialog.h"
+#include "CreateObjectsDialog.h"
 #include "ClientThread.h"
 #include "GoToPositionDialog.h"
 #include "LogWindow.h"
@@ -33,6 +34,8 @@ Copyright Glare Technologies Limited 2024 -
 #include "URLWhitelist.h"
 #include "URLParser.h"
 #include "CEF.h"
+#include "ThreadMessages.h"
+#include "MeshBuilding.h"
 #include "../shared/Protocol.h"
 #include "../shared/Version.h"
 #include "../shared/LODGeneration.h"
@@ -67,6 +70,7 @@ Copyright Glare Technologies Limited 2024 -
 #include "../utils/FileChecksum.h"
 #include "../utils/FileOutStream.h"
 #include "../utils/BufferOutStream.h"
+#include "../utils/IndigoXMLDoc.h"
 #include "../utils/TaskManager.h"
 #include "../networking/MySocket.h"
 #include "../graphics/ImageMap.h"
@@ -84,7 +88,7 @@ Copyright Glare Technologies Limited 2024 -
 #if BUGSPLAT_SUPPORT
 #include <BugSplat.h>
 #endif
-#include <SDL.h>
+
 
 #ifdef _WIN32
 #include <d3d11.h>
@@ -151,7 +155,9 @@ MainWindow::MainWindow(const std::string& base_dir_path_, const std::string& app
 	ui->menuWindow->addAction(ui->worldSettingsDockWidget->toggleViewAction());
 	ui->menuWindow->addAction(ui->chatDockWidget->toggleViewAction());
 	ui->menuWindow->addAction(ui->helpInfoDockWidget->toggleViewAction());
-	//ui->menuWindow->addAction(ui->indigoViewDockWidget->toggleViewAction());
+#if INDIGO_SUPPORT
+	ui->menuWindow->addAction(ui->indigoViewDockWidget->toggleViewAction());
+#endif
 	ui->menuWindow->addAction(ui->diagnosticsDockWidget->toggleViewAction());
 
 	settings = new QSettings("Glare Technologies", "Cyberspace");
@@ -249,6 +255,7 @@ MainWindow::MainWindow(const std::string& base_dir_path_, const std::string& app
 	connect(ui->glWidget, SIGNAL(focusOutSignal()), this, SLOT(glWidgetFocusOut()));
 	connect(ui->glWidget, SIGNAL(mouseWheelSignal(QWheelEvent*)), this, SLOT(glWidgetMouseWheelEvent(QWheelEvent*)));
 	connect(ui->glWidget, SIGNAL(gamepadButtonXChangedSignal(bool)), this, SLOT(gamepadButtonXChanged(bool)));
+	connect(ui->glWidget, SIGNAL(gamepadButtonAChangedSignal(bool)), this, SLOT(gamepadButtonAChanged(bool)));
 	connect(ui->glWidget, SIGNAL(viewportResizedSignal(int, int)), this, SLOT(glWidgetViewportResized(int, int)));
 	connect(ui->glWidget, SIGNAL(cutShortcutActivated()), this, SLOT(glWidgetCutShortcutTriggered()));
 	connect(ui->glWidget, SIGNAL(copyShortcutActivated()), this, SLOT(glWidgetCopyShortcutTriggered()));
@@ -611,21 +618,21 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 void MainWindow::onIndigoViewDockWidgetVisibilityChanged(bool visible)
 {
-	/*conPrint("--------------------------------------- MainWindow::onIndigoViewDockWidgetVisibilityChanged (visible: " + boolToString(visible) + ") --------------");
+	conPrint("--------------------------------------- MainWindow::onIndigoViewDockWidgetVisibilityChanged (visible: " + boolToString(visible) + ") --------------");
 	if(visible)
 	{
 		this->ui->indigoView->initialise(this->base_dir_path);
 
-		if(this->world_state.nonNull())
+		if(gui_client.world_state)
 		{
-			Lock lock(this->world_state->mutex);
-			this->ui->indigoView->addExistingObjects(*this->world_state, *this->resource_manager);
+			Lock lock(gui_client.world_state->mutex);
+			this->ui->indigoView->addExistingObjects(*gui_client.world_state, *gui_client.resource_manager);
 		}
 	}
 	else
 	{
 		this->ui->indigoView->shutdown();
-	}*/
+	}
 }
 
 
@@ -1078,7 +1085,7 @@ void MainWindow::timerEvent(QTimerEvent* event)
 	in_CEF_message_loop = false;
 
 
-	SDL_GameControllerUpdate();
+	// SDL_GameControllerUpdate(); // SDL gamepad support
 
 	// Append any accumulated Qt debug messages to the log window.
 	if(!qt_debug_msgs.empty())
@@ -1094,7 +1101,7 @@ void MainWindow::timerEvent(QTimerEvent* event)
 	const QPoint mouse_point = ui->glWidget->mapFromGlobal(QCursor::pos());
 
 	MouseCursorState mouse_cursor_state;
-	mouse_cursor_state.cursor_pos = Vec2i(mouse_point.x(), mouse_point.y());
+	mouse_cursor_state.cursor_pos = Vec2i(mouse_point.x(), mouse_point.y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_cursor_state.gl_coords =  GLCoordsForGLWidgetPos(this, Vec2f((float)mouse_point.x(), (float)mouse_point.y()));
 
 	// NOTE: Stupid qt: QApplication::keyboardModifiers() doesn't update properly when just CTRL is pressed/released, without any other events.
@@ -1110,6 +1117,11 @@ void MainWindow::timerEvent(QTimerEvent* event)
 	mouse_cursor_state.alt_key_down = alt_key_down;
 	mouse_cursor_state.ctrl_key_down = ctrl_key_down;
 	gui_client.timerEvent(mouse_cursor_state);
+
+#if INDIGO_SUPPORT
+	if(this->ui->indigoView)
+		this->ui->indigoView->timerThink();
+#endif
 
 	updateDiagnostics();
 	
@@ -2009,6 +2021,80 @@ void MainWindow::on_actionAdd_Audio_Source_triggered()
 }
 
 
+void MainWindow::on_actionAdd_Decal_triggered()
+{
+	// Offset down by 0.25 to allow for centering with voxel width of 0.5.
+	const Vec3d ob_pos = gui_client.cam_controller.getFirstPersonPosition() + gui_client.cam_controller.getForwardsVec() * 2.0f - Vec3d(0.25, 0.25, 0.25);
+
+	// Check permissions
+	bool ob_pos_in_parcel;
+	const bool have_creation_perms = gui_client.haveParcelObjectCreatePermissions(ob_pos, ob_pos_in_parcel);
+	if(!have_creation_perms)
+	{
+		if(ob_pos_in_parcel)
+			showErrorNotification("You do not have write permissions, and are not an admin for this parcel.");
+		else
+			showErrorNotification("You can only create objects in a parcel that you have write permissions for.");
+		return;
+	}
+
+
+	const Quatf facing_rot = Quatf::fromAxisAndAngle(Vec3f(0, 0, 1), Maths::roundToMultipleFloating((float)gui_client.cam_controller.getAngles().x - Maths::pi_2<float>(), Maths::pi_4<float>())); // Round to nearest 45 degree angle.
+	const Quatf x_y_plane_to_vert_rot = Quatf::fromAxisAndAngle(Vec3f(1, 0, 0), Maths::pi_2<float>());
+
+	Vec4f axis;
+	float angle;
+	(facing_rot * x_y_plane_to_vert_rot).toAxisAndAngle(axis, angle);
+
+	WorldObjectRef new_world_object = new WorldObject();
+	new_world_object->uid = UID(0); // Will be set by server
+	new_world_object->object_type = WorldObject::ObjectType_Generic;
+	new_world_object->pos = ob_pos;
+	new_world_object->axis = Vec3f(axis);
+	new_world_object->angle = angle;
+	new_world_object->scale = Vec3f(1.f, 1.f, 1.f);
+	new_world_object->max_model_lod_level = 0;
+	BitUtils::zeroBit(new_world_object->flags, WorldObject::COLLIDABLE_FLAG); // make non-collidable.
+
+
+	std::string unit_cube_mesh_URL = "unit_cube_bmesh_7263660735544605926.bmesh";
+	if(!gui_client.resource_manager->isFileForURLPresent(unit_cube_mesh_URL))
+	{
+		Reference<Indigo::Mesh> indigo_mesh = MeshBuilding::makeUnitCubeIndigoMesh();
+		BatchedMeshRef mesh = BatchedMesh::buildFromIndigoMesh(*indigo_mesh);
+		const std::string bmesh_disk_path = PlatformUtils::getTempDirPath() + "/unit_cube.bmesh";
+		mesh->writeToFile(bmesh_disk_path);
+		unit_cube_mesh_URL = gui_client.resource_manager->copyLocalFileToResourceDirIfNotPresent(bmesh_disk_path);
+		assert(unit_cube_mesh_URL == "unit_cube_bmesh_7263660735544605926.bmesh");
+	}
+
+	new_world_object->model_url = unit_cube_mesh_URL;
+
+	new_world_object->materials.resize(1);
+	new_world_object->materials[0] = new WorldMaterial();
+	new_world_object->materials[0]->flags = WorldMaterial::DECAL_FLAG;
+
+	const js::AABBox aabb_os = gui_client.image_cube_shape.getAABBOS();
+	new_world_object->setAABBOS(aabb_os);
+
+
+	// Send CreateObject message to server
+	{
+		MessageUtils::initPacket(scratch_packet, Protocol::CreateObject);
+		new_world_object->writeToNetworkStream(scratch_packet);
+
+		enqueueMessageToSend(*gui_client.client_thread, scratch_packet);
+	}
+
+
+
+	showInfoNotification("Decal Object created.");
+
+	// Deselect any currently selected object
+	gui_client.deselectObject();
+}
+
+
 void MainWindow::on_actionAdd_Voxels_triggered()
 {
 	// Offset down by 0.25 to allow for centering with voxel width of 0.5.
@@ -2831,6 +2917,7 @@ void MainWindow::on_actionOptions_triggered()
 		gui_client.load_distance2 = dist*dist;
 
 		//ui->glWidget->opengl_engine->setMSAAEnabled(settings->value(MainOptionsDialog::MSAAKey(), /*default val=*/true).toBool());
+		gui_client.opengl_engine->setSSAOEnabled(settings->value(MainOptionsDialog::SSAOKey(), /*default val=*/false).toBool());
 
 		startMainTimer(); // Restart main timer, as the timer interval depends on max FPS, whiich may have changed.
 	}
@@ -2969,27 +3056,194 @@ void MainWindow::on_actionSave_Object_To_Disk_triggered()
 {
 	if(gui_client.selected_ob)
 	{
-		QString last_save_object_dir = "";
+		QString last_save_object_dir = settings->value("mainwindow/lastSaveObjectDir").toString();
 
 		QFileDialog::Options options;
 		QString selected_filter;
 		const QString selected_filename = QFileDialog::getSaveFileName(this,
 			tr("Select file..."),
 			last_save_object_dir,
-			tr("XML file (*.xml)"), // tr("Audio file (*.mp3 *.m4a *.aac *.wav)"),
+			tr("XML file (*.xml)"),
 			&selected_filter,
 			options
 		);
 
 		if(!selected_filename.isEmpty())
 		{
-			const std::string xml = gui_client.selected_ob->serialiseToXML(/*tab depth=*/0);
+			settings->setValue("mainwindow/lastSaveObjectDir", QtUtils::toQString(FileUtils::getDirectory(QtUtils::toIndString(selected_filename))));
+
+			try
+			{
+				const std::string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + gui_client.selected_ob->serialiseToXML(/*tab depth=*/0);
+
+				FileUtils::writeEntireFileTextMode(QtUtils::toStdString(selected_filename), xml);
+
+				gui_client.showInfoNotification("Saved object to '" + QtUtils::toStdString(selected_filename) + "'.");
+			}
+			catch(glare::Exception& e)
+			{
+				QtUtils::showErrorMessageDialog("Error saving object to disk: " + e.what(), this);
+			}
+		}
+	}
+}
+
+
+void MainWindow::on_actionSave_Parcel_Objects_To_Disk_triggered()
+{
+	QString last_save_object_dir = settings->value("mainwindow/lastSaveObjectDir").toString();
+
+	QFileDialog::Options options;
+	QString selected_filter;
+	const QString selected_filename = QFileDialog::getSaveFileName(this,
+		tr("Select file..."),
+		last_save_object_dir,
+		tr("XML file (*.xml)"),
+		&selected_filter,
+		options
+	);
+
+	if(!selected_filename.isEmpty())
+	{
+		settings->setValue("mainwindow/lastSaveObjectDir", QtUtils::toQString(FileUtils::getDirectory(QtUtils::toIndString(selected_filename))));
+
+		try
+		{
+			size_t num_obs_serialised;
+			const std::string xml = gui_client.serialiseAllObjectsInParcelToXML(num_obs_serialised);
 
 			FileUtils::writeEntireFileTextMode(QtUtils::toStdString(selected_filename), xml);
 
-			gui_client.showInfoNotification("Saved object to '" + QtUtils::toStdString(selected_filename) + "'.");
+			gui_client.showInfoNotification("Saved " + toString(num_obs_serialised) + " objects to '" + QtUtils::toIndString(selected_filename) + "'.");
+		}
+		catch(glare::Exception& e)
+		{
+			QtUtils::showErrorMessageDialog("Error saving objects to disk: " + e.what(), this);
 		}
 	}
+}
+
+
+class LoadObjectsFromXMLTask : public glare::Task, public PrintOutput
+{
+public:
+	virtual void run(size_t /*thread_index*/) override
+	{
+		try
+		{
+			IndigoXMLDoc doc(xml_path);
+
+			if(std::string(doc.getRootElement().name()) == "object")
+			{
+				WorldObjectRef ob = WorldObject::loadFromXMLElem(/*object file path=*/xml_path, /*convert rel paths to abs disk paths=*/false, doc.getRootElement());
+
+				print("Creating object...");
+
+				gui_client->createObjectLoadedFromXML(ob, *this);
+			}
+			else if(std::string(doc.getRootElement().name()) == "objects")
+			{
+				for(pugi::xml_node ob_node = doc.getRootElement().child("object"); ob_node && !stop_running; ob_node = ob_node.next_sibling("object"))
+				{
+					WorldObjectRef ob = WorldObject::loadFromXMLElem(/*object file path=*/xml_path, /*convert rel paths to abs disk paths=*/false, ob_node);
+
+					print("Creating object...");
+
+					try
+					{
+						gui_client->createObjectLoadedFromXML(ob, *this);
+					}
+					catch(glare::Exception& e)
+					{
+						// Catch exception and continue with next object.
+						print("Error loading object from disk: " + e.what());
+					}
+				}
+			}
+
+			print("Done.");
+		}
+		catch(glare::Exception& e)
+		{
+			print("Error loading object(s) from disk: " + e.what());
+			print("Done.");
+		}
+	}
+
+
+	virtual void cancelTask() override
+	{
+		stop_running = 1;
+	}
+
+	void print(const std::string& s) override // Print a message and a newline character.
+	{
+		out_message_queue->enqueue(s);
+
+		gui_client->msg_queue.enqueue(new LogMessage(s));
+	}
+
+	void printStr(const std::string& s) override // Print a message without a newline character.
+	{}
+
+	std::string xml_path;
+
+	ThreadSafeQueue<std::string>* out_message_queue;
+	GUIClient* gui_client;
+
+	glare::AtomicInt stop_running;
+};
+
+
+void MainWindow::on_actionLoad_Objects_From_Disk_triggered()
+{
+	QString last_save_object_dir = settings->value("mainwindow/lastSaveObjectDir").toString();
+
+	QFileDialog::Options options;
+	QString selected_filter;
+	const QString selected_filename = QFileDialog::getOpenFileName(this,
+		tr("Select file..."),
+		last_save_object_dir,
+		tr("XML file (*.xml)"),
+		&selected_filter,
+		options
+	);
+	 
+	if(!selected_filename.isEmpty())
+	{
+		settings->setValue("mainwindow/lastSaveObjectDir", QtUtils::toQString(FileUtils::getDirectory(QtUtils::toIndString(selected_filename))));
+
+		// Do the work in another thread so we don't lock up the main thread.
+		// The work will be done in a LoadObjectsFromXMLTask.
+		ThreadSafeQueue<std::string> message_queue; // Messages will be emitted from LoadObjectsFromXMLTask, placed into this queue, and then read by the CreateObjectsDialog.
+		
+		{
+			CreateObjectsDialog dialog(settings);
+			dialog.msg_queue = &message_queue;
+
+			Reference<LoadObjectsFromXMLTask> task = new LoadObjectsFromXMLTask();
+			task->xml_path = QtUtils::toIndString(selected_filename);
+			task->out_message_queue = &message_queue;
+			task->gui_client = &gui_client;
+
+			glare::TaskManager task_manager(1);
+			task_manager.addTask(task);
+
+			dialog.exec();
+
+			task = NULL;
+			task_manager.cancelAndWaitForTasksToComplete(); // Interrupt the LoadObjectsFromXMLTask if it hasn't completed already.
+		}
+	}
+}
+
+
+void MainWindow::on_actionDelete_All_Parcel_Objects_triggered()
+{
+	size_t num_obs_deleted;
+	gui_client.deleteAllParcelObjects(num_obs_deleted);
+
+	gui_client.showInfoNotification("Deleted " + toString(num_obs_deleted) + " objects.");
 }
 
 
@@ -3260,7 +3514,7 @@ void MainWindow::glWidgetMousePressed(QMouseEvent* e)
 	const Vec2f widget_pos((float)e->pos().x(), (float)e->pos().y());
 
 	MouseEvent mouse_event;
-	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y());
+	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_event.gl_coords = GLCoordsForGLWidgetPos(this, widget_pos);
 	mouse_event.button = fromQtMouseButton(e->button());
 	mouse_event.modifiers = fromQtModifiers(e->modifiers());
@@ -3278,7 +3532,7 @@ void MainWindow::glWidgetMouseReleased(QMouseEvent* e)
 	const Vec2f gl_coords = GLCoordsForGLWidgetPos(this, widget_pos);
 
 	MouseEvent mouse_event;
-	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y());
+	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_event.gl_coords = gl_coords;
 	mouse_event.button = fromQtMouseButton(e->button());
 	mouse_event.modifiers = fromQtModifiers(e->modifiers());
@@ -3452,7 +3706,7 @@ void MainWindow::doObjectSelectionTraceForMouseEvent(QMouseEvent* e)
 	const Vec2f gl_coords = GLCoordsForGLWidgetPos(this, widget_pos);
 
 	MouseEvent mouse_event;
-	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y());
+	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_event.gl_coords = gl_coords;
 	mouse_event.button = fromQtMouseButton(e->button());
 	mouse_event.modifiers = fromQtModifiers(e->modifiers());
@@ -3469,7 +3723,7 @@ void MainWindow::glWidgetMouseDoubleClicked(QMouseEvent* e)
 	const Vec2f gl_coords = GLCoordsForGLWidgetPos(this, widget_pos);
 
 	MouseEvent mouse_event;
-	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y());
+	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_event.gl_coords = gl_coords;
 	mouse_event.button = fromQtMouseButton(e->button());
 	mouse_event.modifiers = fromQtModifiers(e->modifiers());
@@ -3487,7 +3741,7 @@ void MainWindow::glWidgetMouseMoved(QMouseEvent* e)
 	const Vec2f gl_coords = GLCoordsForGLWidgetPos(this, widget_pos);
 
 	MouseEvent mouse_event;
-	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y());
+	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_event.gl_coords = gl_coords;
 	mouse_event.modifiers = fromQtModifiers(e->modifiers());
 	mouse_event.button_state = fromQTMouseButtons(e->buttons());
@@ -3626,7 +3880,7 @@ void MainWindow::glWidgetMouseWheelEvent(QWheelEvent* e)
 	const Vec2f gl_coords = GLCoordsForGLWidgetPos(this, widget_pos);
 
 	MouseWheelEvent mouse_event;
-	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y());
+	mouse_event.cursor_pos = Vec2i(e->pos().x(), e->pos().y()) * ui->glWidget->devicePixelRatio(); // Use devicePixelRatio to convert from logical to physical pixel coords.
 	mouse_event.gl_coords = gl_coords;
 	mouse_event.angle_delta = Vec2i(e->angleDelta().x(), e->angleDelta().y());
 	mouse_event.modifiers = fromQtModifiers(e->modifiers());
@@ -3644,6 +3898,12 @@ void MainWindow::glWidgetMouseWheelEvent(QWheelEvent* e)
 void MainWindow::gamepadButtonXChanged(bool pressed)
 {
 	gui_client.gamepadButtonXChanged(pressed);
+}
+
+
+void MainWindow::gamepadButtonAChanged(bool pressed)
+{
+	gui_client.gamepadButtonAChanged(pressed);
 }
 
 

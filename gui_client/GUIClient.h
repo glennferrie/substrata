@@ -120,6 +120,8 @@ public:
 	void afterGLInitInitialise(double device_pixel_ratio, Reference<OpenGLEngine> opengl_engine, 
 		const TextRendererFontFaceSizeSetRef& fonts, const TextRendererFontFaceSizeSetRef& emoji_fonts);
 
+	void initAudioEngine();
+
 	void shutdown();
 
 	void timerEvent(const MouseCursorState& mouse_cursor_state);
@@ -149,7 +151,7 @@ public:
 	void startDownloadingResourcesForObject(WorldObject* ob, int ob_lod_level);
 	void startDownloadingResourcesForAvatar(Avatar* ob, int ob_lod_level, bool our_avatar);
 
-	void startDownloadingResource(const std::string& url, const Vec4f& centroid_ws, float aabb_ws_longest_len, DownloadingResourceInfo& resouce_info); // For every resource that the object uses (model, textures etc..), if the resource is not present locally, start downloading it.
+	void startDownloadingResource(const std::string& url, const Vec4f& centroid_ws, float aabb_ws_longest_len, const DownloadingResourceInfo& resouce_info); // For every resource that the object uses (model, textures etc..), if the resource is not present locally, start downloading it.
 	
 	std::string getDiagnosticsString(bool do_graphics_diagnostics, bool do_physics_diagnostics, bool do_terrain_diagnostics, double last_timerEvent_CPU_work_elapsed, double last_updateGL_time);
 	void diagnosticsSettingsChanged();
@@ -180,6 +182,7 @@ public:
 	void mouseMoved(MouseEvent& mouse_event);
 	void onMouseWheelEvent(MouseWheelEvent& e);
 	void gamepadButtonXChanged(bool pressed);
+	void gamepadButtonAChanged(bool pressed);
 	void viewportResized(int w, int h);
 	void updateGroundPlane();
 	void sendLightmapNeededFlagsSlot();
@@ -217,11 +220,13 @@ public:
 	void addParcelObjects();
 	void removeParcelObjects();
 	void recolourParcelsForLoggedInState();
-	void updateSelectedObjectPlacementBeam();
+	void updateSelectedObjectPlacementBeamAndGizmos();
 	void updateInstancedCopiesOfObject(WorldObject* ob);
 	void removeInstancesOfObject(WorldObject* ob);
 	void removeObScriptingInfo(WorldObject* ob);
 	void bakeLightmapsForAllObjectsInParcel(uint32 lightmap_flag);
+	std::string serialiseAllObjectsInParcelToXML(size_t& num_obs_serialised_out);
+	void deleteAllParcelObjects(size_t& num_obs_deleted_out);
 	void setMaterialFlagsForObject(WorldObject* ob);
 public:
 	bool objectModificationAllowed(const WorldObject& ob);
@@ -283,6 +288,7 @@ public:
 
 	void createObject(const std::string& mesh_path, BatchedMeshRef loaded_mesh, bool loaded_mesh_is_image_cube,
 		const glare::AllocatorVector<Voxel, 16>& decompressed_voxels, const Vec3d& ob_pos, const Vec3f& scale, const Vec3f& axis, float angle, const std::vector<WorldMaterialRef>& materials);
+	void createObjectLoadedFromXML(WorldObjectRef ob, PrintOutput& use_print_output);
 	void createImageObject(const std::string& local_image_path);
 	void createModelObject(const std::string& local_model_path);
 	void createImageObjectForWidthAndHeight(const std::string& local_image_path, int w, int h, bool has_alpha);

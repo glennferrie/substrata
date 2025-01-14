@@ -90,6 +90,7 @@ if(NOT USE_SDL)
 	addMocFileRule(gui_client DiagnosticsWidget)
 	addMocFileRule(gui_client TerrainSpecSectionWidget)
 	addMocFileRule(gui_client WorldSettingsWidget)
+	addMocFileRule(gui_client CreateObjectsDialog)
 
 	addMocFileRule(qt FileSelectWidget)
 	addMocFileRule(qt RealControl)
@@ -123,6 +124,7 @@ if(NOT USE_SDL)
 	addUIFileRule(gui_client DiagnosticsWidget)
 	addUIFileRule(gui_client TerrainSpecSectionWidget)
 	addUIFileRule(gui_client WorldSettingsWidget)
+	addUIFileRule(gui_client CreateObjectsDialog)
 
 	addUIFileRule(qt FileSelectWidget)
 	addUIFileRule(qt RealControl)
@@ -372,6 +374,9 @@ else()
 		${CMAKE_SOURCE_DIR}/gui_client/URLWidget.ui
 		${CMAKE_SOURCE_DIR}/gui_client/ShaderEditorOutputTextEdit.cpp
 		${CMAKE_SOURCE_DIR}/gui_client/ShaderEditorOutputTextEdit.h
+		${CMAKE_SOURCE_DIR}/gui_client/CreateObjectsDialog.cpp
+		${CMAKE_SOURCE_DIR}/gui_client/CreateObjectsDialog.h
+		${CMAKE_SOURCE_DIR}/gui_client/CreateObjectsDialog.ui
 	)
 endif()
 
@@ -408,6 +413,7 @@ if(NOT USE_SDL)
 	${CMAKE_SOURCE_DIR}/gui_client/moc_DiagnosticsWidget.cpp
 	${CMAKE_SOURCE_DIR}/gui_client/moc_TerrainSpecSectionWidget.cpp
 	${CMAKE_SOURCE_DIR}/gui_client/moc_WorldSettingsWidget.cpp
+	${CMAKE_SOURCE_DIR}/gui_client/moc_CreateObjectsDialog.cpp
 
 	${CMAKE_SOURCE_DIR}/gui_client/ui_AddObjectDialog.h
 	${CMAKE_SOURCE_DIR}/gui_client/ui_AddVideoDialog.h
@@ -435,6 +441,7 @@ if(NOT USE_SDL)
 	${CMAKE_SOURCE_DIR}/gui_client/ui_DiagnosticsWidget.h
 	${CMAKE_SOURCE_DIR}/gui_client/ui_TerrainSpecSectionWidget.h
 	${CMAKE_SOURCE_DIR}/gui_client/ui_WorldSettingsWidget.h
+	${CMAKE_SOURCE_DIR}/gui_client/ui_CreateObjectsDialog.h
 	)
 
 
@@ -571,7 +578,7 @@ endif()
 
 
 #===================================== Resonance Audio =====================================
-if(NOT EMSCRIPTEN)
+if(1)
 
 	set(res_ambisonics
 	../resonance-audio/resonance_audio/ambisonics/ambisonic_binaural_decoder.cc
@@ -975,8 +982,10 @@ add_definitions(-DBASIS_NO_IMAGE_READERS=1) # Disable PNG and JPG reading code i
 
 
 
-
-
+#======================== Indigo ===========================
+if(INDIGO_SUPPORT)
+	add_definitions(-DINDIGO_SUPPORT=1)
+endif()
 
 
 SET(rc_stuff "../icons/substrata.rc")
@@ -1084,7 +1093,7 @@ add_definitions(-DGUI_CLIENT=1)
 
 include(../cmake/shared_target_settings.cmake)
 
-#if(USE_SDL)
+if(USE_SDL)
 	include_directories(${SDL_BUILD_DIR}/include/SDL2)
 	
 	if(WIN32)
@@ -1094,8 +1103,7 @@ include(../cmake/shared_target_settings.cmake)
 	endif()
 	
 	add_definitions(-DUSE_SDL=1)
-#else()
-if(NOT USE_SDL)
+else()
 	# Else use Qt:
 	add_definitions(-DUSE_QT=1)
 endif()
@@ -1103,7 +1111,7 @@ endif()
 
 if(EMSCRIPTEN)
 	target_link_libraries(${CURRENT_TARGET}
-		${GLARE_CORE_LIBS_ENV}/SDL/sdl_build_emscripten/libSDL2.a
+		${SDL_BUILD_DIR}/libSDL2.a
 		Jolt # Jolt physics
 		Opus
 	)
@@ -1117,8 +1125,10 @@ if(EMSCRIPTEN)
 	# model_and_texture_loader_task_manager:		8
 	# ClientSenderThread							1
 	# ClientThread									1
+	# ResonanceThread								1
+	# StreamerThread								1
 	# 
-	# Total:										26
+	# Total:										28
 	
 	target_link_options(${CURRENT_TARGET} PRIVATE
 		"-sMIN_WEBGL_VERSION=2"
@@ -1130,7 +1140,7 @@ if(EMSCRIPTEN)
 		"-sMAXIMUM_MEMORY=4000MB" # Default is 2GB.
 		"-pthread"
 		"-sENVIRONMENT=web,worker" # Specify that the JS code only supports running in web/web workers.(Not node.js etc.)
-		"-sPTHREAD_POOL_SIZE=26" # See calculation above
+		"-sPTHREAD_POOL_SIZE=28" # See calculation above
 		"-sSTACK_SIZE=262144"
 		"-sEXPORTED_RUNTIME_METHODS=ccall" # Needed to be able to call into C++ from JS.  Used in emscripten_browser_clipboard.
 		"-lwebsocket.js" # To use emscripten websockets API: https://emscripten.org/docs/porting/networking.html#emscripten-websockets-api
@@ -1174,12 +1184,6 @@ elseif(WIN32)
 	target_link_libraries(${CURRENT_TARGET}
 		OpenGL32
 
-	
-		
-		#debug 		C:/programming/indigo/output/vs2019/indigo_x64/Debug/indigo_sdk_lib.lib
-		#optimized 	C:/programming/indigo/output/vs2019/indigo_x64/RelWithDebInfo/indigo_sdk_lib.lib
-
-
 		# Media foundation video reading:
 		mfplat.lib 
 		mfreadwrite.lib 
@@ -1198,15 +1202,21 @@ elseif(WIN32)
 		Opus
 	)
 	
-	#if(USE_SDL)
+	if(INDIGO_SUPPORT)
+		target_link_libraries(${CURRENT_TARGET}
+			debug 		C:/programming/indigo/output/vs2022/indigo_x64/Debug/indigo_sdk_lib.lib
+			optimized 	C:/programming/indigo/output/vs2022/indigo_x64/RelWithDebInfo/indigo_sdk_lib.lib
+		)
+	endif()
+	
+	if(USE_SDL)
 		target_link_libraries(${CURRENT_TARGET}
 			debug "${SDL_BUILD_DIR}/Debug/SDL2d.lib" 
 			debug "${SDL_BUILD_DIR}/Debug/SDL2maind.lib" 
 			optimized "${SDL_BUILD_DIR}/RelWithDebInfo/SDL2.lib" 
 			optimized "${SDL_BUILD_DIR}/RelWithDebInfo/SDL2main.lib" 
 		)
-	#else() # Else use Qt:
-	if(NOT USE_SDL)
+	else() # Else use Qt:
 		target_link_libraries(${CURRENT_TARGET}
 		
 				# Qt 6:

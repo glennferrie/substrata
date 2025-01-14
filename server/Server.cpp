@@ -185,13 +185,14 @@ static ServerConfig parseServerConfig(const std::string& config_path)
 	pugi::xml_node root_elem = doc.getRootElement();
 
 	ServerConfig config;
-	config.webserver_fragments_dir		= XMLParseUtils::parseStringWithDefault(root_elem, "webserver_fragments_dir", /*default val=*/"");
-	config.webserver_public_files_dir	= XMLParseUtils::parseStringWithDefault(root_elem, "webserver_public_files_dir", /*default val=*/"");
-	config.webclient_dir				= XMLParseUtils::parseStringWithDefault(root_elem, "webclient_dir", /*default val=*/"");
-	config.tls_certificate_path			= XMLParseUtils::parseStringWithDefault(root_elem, "tls_certificate_path", /*default val=*/"");
-	config.tls_private_key_path			= XMLParseUtils::parseStringWithDefault(root_elem, "tls_private_key_path", /*default val=*/"");
-	config.allow_light_mapper_bot_full_perms = XMLParseUtils::parseBoolWithDefault(root_elem, "allow_light_mapper_bot_full_perms", /*default val=*/false);
-	config.update_parcel_sales			= XMLParseUtils::parseBoolWithDefault(root_elem, "update_parcel_sales", /*default val=*/false);
+	config.webserver_fragments_dir				= XMLParseUtils::parseStringWithDefault(root_elem, "webserver_fragments_dir", /*default val=*/"");
+	config.webserver_public_files_dir			= XMLParseUtils::parseStringWithDefault(root_elem, "webserver_public_files_dir", /*default val=*/"");
+	config.webclient_dir						= XMLParseUtils::parseStringWithDefault(root_elem, "webclient_dir", /*default val=*/"");
+	config.tls_certificate_path					= XMLParseUtils::parseStringWithDefault(root_elem, "tls_certificate_path", /*default val=*/"");
+	config.tls_private_key_path					= XMLParseUtils::parseStringWithDefault(root_elem, "tls_private_key_path", /*default val=*/"");
+	config.allow_light_mapper_bot_full_perms	= XMLParseUtils::parseBoolWithDefault(root_elem, "allow_light_mapper_bot_full_perms", /*default val=*/false);
+	config.update_parcel_sales					= XMLParseUtils::parseBoolWithDefault(root_elem, "update_parcel_sales", /*default val=*/false);
+	config.do_lua_http_request_rate_limiting	= XMLParseUtils::parseBoolWithDefault(root_elem, "do_lua_http_request_rate_limiting", /*default val=*/true);
 	return config;
 }
 
@@ -685,16 +686,43 @@ int main(int argc, char *argv[])
 					{
 						const UserEnteredParcelThreadMessage* parcel_msg = static_cast<UserEnteredParcelThreadMessage*>(msg.ptr());
 
-						// Look up object
-						WorldStateLock world_lock(server.world_state->mutex);
-						auto res = parcel_msg->world->getObjects(world_lock).find(parcel_msg->object_uid);
-						if(res != parcel_msg->world->getObjects(world_lock).end())
+						if(parcel_msg->object_uid.valid())
 						{
-							WorldObject* ob = res->second.ptr();
+							// Look up object
+							WorldStateLock world_lock(server.world_state->mutex);
+							auto res = parcel_msg->world->getObjects(world_lock).find(parcel_msg->object_uid);
+							if(res != parcel_msg->world->getObjects(world_lock).end())
+							{
+								WorldObject* ob = res->second.ptr();
 
-							// Execute event handler in any scripts that are listening on this object
-							if(ob->event_handlers)
-								ob->event_handlers->executeOnUserEnteredParcelHandlers(parcel_msg->avatar_uid, parcel_msg->object_uid, parcel_msg->parcel_id, world_lock);
+								// Execute event handler in any scripts that are listening on this object
+								if(ob->event_handlers)
+									ob->event_handlers->executeOnUserEnteredParcelHandlers(parcel_msg->avatar_uid, parcel_msg->object_uid, parcel_msg->parcel_id, world_lock);
+							}
+						}
+						else
+						{
+							// If object_uid is invalid, then this event is not from a script, but just from a user entering a parcel.
+							// See if there are any social events currently happening on this parcel, if there are, add user to attendee list.
+							if(parcel_msg->client_user_id.valid())
+							{
+								const TimeStamp current_time = TimeStamp::currentTime();
+
+								WorldStateLock world_lock(server.world_state->mutex);
+								for(auto it = server.world_state->events.begin(); it != server.world_state->events.end(); ++it)
+								{
+									SubEvent* event = it->second.ptr();
+									if((event->parcel_id == parcel_msg->parcel_id) && // If event is at this parcel
+										(event->start_time <= current_time) && // and is currently happening
+										(event->end_time >= current_time))
+									{
+										// Add the client to the event attendee list (if not already inserted)
+										const bool inserted = event->attendee_ids.insert(parcel_msg->client_user_id).second;
+										if(inserted)
+											server.world_state->addEventAsDBDirty(event);
+									}
+								}
+							}
 						}
 					}
 					else if(dynamic_cast<UserExitedParcelThreadMessage*>(msg.ptr()))

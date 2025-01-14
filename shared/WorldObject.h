@@ -253,6 +253,7 @@ public:
 	static const uint64 NUM_OBJECT_TYPES = 7;
 
 	static std::string objectTypeString(ObjectType t);
+	static ObjectType objectTypeForString(const std::string& ob_type_string);
 
 	static void test();
 
@@ -271,7 +272,7 @@ private:
 	js::AABBox aabb_os; // Object-space AABB
 public:
 	UID uid;
-	uint32 object_type;
+	ObjectType object_type;
 
 	static const size_t MAX_URL_SIZE                      = 1000;
 	static const size_t MAX_SCRIPT_SIZE                   = 10000;
@@ -382,6 +383,7 @@ public:
 	Reference<GLLight> opengl_light;
 	Reference<PhysicsObject> physics_object;
 
+	Reference<GLObject> edit_aabb; // Visualisation of the object bounding box, for editing, for decal objects etc.
 
 	Reference<GLObject> diagnostics_gl_ob; // For diagnostics visualisation
 	Reference<GLObject> diagnostics_unsmoothed_gl_ob; // For diagnostics visualisation
@@ -403,7 +405,9 @@ public:
 
 	Reference<ImageMap<uint8, UInt8ComponentValueTraits> > hypercard_map;
 
-	//Reference<Indigo::SceneNodeModel> indigo_model_node;
+#if INDIGO_SUPPORT
+	Reference<Indigo::SceneNodeModel> indigo_model_node;
+#endif
 
 	bool is_selected;
 

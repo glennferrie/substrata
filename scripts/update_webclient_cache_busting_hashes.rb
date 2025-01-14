@@ -56,9 +56,6 @@ def doReplacementsForGeneratedFilesInDir(webclient_html_contents, output_dir)
 	gui_client_wasm_hash = computeHashForFile(output_dir + "/gui_client.wasm")
 	webclient_html_contents = checkAndReplaceString(webclient_html_contents, "GUI_CLIENT_WASM_HASH", gui_client_wasm_hash)
 
-	gui_client_worker_js_hash = computeHashForFile(output_dir + "/gui_client.worker.js")
-	webclient_html_contents = checkAndReplaceString(webclient_html_contents, "GUI_CLIENT_WORKER_JS_HASH", gui_client_worker_js_hash)
-
 	gui_client_js_hash = computeHashForFile(output_dir + "/gui_client.js")
 	webclient_html_contents = checkAndReplaceString(webclient_html_contents, "GUI_CLIENT_JS_HASH", gui_client_js_hash)
 
@@ -67,21 +64,31 @@ end
 
 #-------------------- Update webclient.html in output dir (not test_builds) with hashes of the various files, for cache-busting ----------------------
 puts "Updating webclient.html with hashes..."
-webclient_html_contents = File.read(substrata_dir + "/webclient/webclient.html")
+if(File.exist?(cyberspace_output + "/gui_client.data"))
+	webclient_html_contents = File.read(substrata_dir + "/webclient/webclient.html")
 
-webclient_html_contents = doReplacementsForGeneratedFilesInDir(webclient_html_contents, cyberspace_output)
+	webclient_html_contents = doReplacementsForGeneratedFilesInDir(webclient_html_contents, cyberspace_output)
 
-# Write updated webclient.html contents back to disk in the output directory.
-File.write(cyberspace_output + "/webclient.html", webclient_html_contents)
+	# Write updated webclient.html contents back to disk in the output directory.
+	puts "Writing to " + cyberspace_output + "/webclient.html..."
+	File.write(cyberspace_output + "/webclient.html", webclient_html_contents)
+else
+	puts cyberspace_output + "/gui_client.data not found, skipping."
+end
 
 #---------------------- Update webclient.html in test builds output dir with hashes of the various files, for cache-busting ----------------------
 puts "Updating test_builds/webclient.html with hashes..."
-webclient_html_contents = File.read(substrata_dir + "/webclient/webclient.html")
+if(File.exist?(cyberspace_output + "/test_builds/gui_client.data"))
 
-webclient_html_contents = doReplacementsForGeneratedFilesInDir(webclient_html_contents, cyberspace_output + "/test_builds")
+	webclient_html_contents = File.read(substrata_dir + "/webclient/webclient.html")
 
-# Write updated webclient.html contents back to disk in the output directory.
-File.write(cyberspace_output + "/test_builds/webclient.html", webclient_html_contents)
+	webclient_html_contents = doReplacementsForGeneratedFilesInDir(webclient_html_contents, cyberspace_output + "/test_builds")
 
+	# Write updated webclient.html contents back to disk in the output directory.
+	puts "Writing to " + cyberspace_output + "/test_builds/webclient.html..."
+	File.write(cyberspace_output + "/test_builds/webclient.html", webclient_html_contents)
+else
+	puts cyberspace_output + "/test_builds/gui_client.data not found, skipping."
+end
 
 puts "Done."
